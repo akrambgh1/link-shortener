@@ -1,0 +1,20 @@
+{
+  "name": "link-shortener",
+  "version": "1.0.0",
+  "description": "Snip: a URL shortener with click analytics and QR codes (Node.js, Express, SQLite, Chart.js)",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning server.js",
+    "dev": "node --watch --disable-warning=ExperimentalWarning server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "4.21.2",
+    "qrcode": "1.5.4"
+  },
+  "license": "MIT"
+}

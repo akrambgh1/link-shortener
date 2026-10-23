@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Snip — Short links with analytics</title>
+  <meta name="description" content="Shorten links, create QR codes and see who clicks: by day, referrer, browser and device.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✂️</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="nav">
+    <a href="/" class="logo">✂️ Snip</a>
+    <span class="muted small">Short links · QR codes · Analytics</span>
+  </header>
+
+  <section class="hero">
+    <h1>Make long links <span class="grad">short</span>.<br>See who clicks.</h1>
+    <p class="muted">Free, no sign-up. Your links are tied to this browser.</p>
+
+    <form id="createForm" class="create" autocomplete="off">
+      <div class="create-row">
+        <input id="urlInput" type="text" inputmode="url" placeholder="Paste a long link, e.g. https://github.com/your-name/project" aria-label="Long URL" required>
+        <button class="btn primary" type="submit" id="createBtn">Shorten</button>
+      </div>
+      <div class="alias-row">
+        <span class="muted">Custom alias (optional):</span>
+        <span class="prefix" id="prefix"></span>
+        <input id="aliasInput" placeholder="my-portfolio" maxlength="32" aria-label="Custom alias">
+      </div>
+      <p id="createError" class="error" role="alert" hidden></p>
+    </form>
+
+    <div id="created" class="created" hidden>
+      <img id="createdQr" alt="QR code for the new link" width="96" height="96">
+      <div class="created-body">
+        <span class="muted small">Your short link is ready 🎉</span>
+        <a id="createdLink" target="_blank" rel="noopener"></a>
+        <span id="createdTarget" class="muted small ellipsis"></span>
+      </div>
+      <button class="btn ghost" id="copyCreated">Copy</button>
+    </div>
+  </section>
+
+  <main class="container">
+    <div class="section-head">
+      <h2>Your links <span class="muted" id="linkCount"></span></h2>
+      <input id="filterInput" class="filter" type="search" placeholder="Filter links…" aria-label="Filter links">
+    </div>
+    <div id="summary" class="summary-cards"></div>
+    <div id="linkList" class="link-list"></div>
+    <div id="empty" class="empty" hidden>
+      <span>🔗</span>
+      <p>No links yet. Shorten your first one above!</p>
+    </div>
+  </main>
+
+  <!-- Stats panel -->
+  <div id="statsScrim" class="scrim" hidden></div>
+  <aside id="stats" class="stats" aria-label="Link analytics" hidden>
+    <header class="stats-head">
+      <div>
+        <h2 id="statsTitle"></h2>
+        <a id="statsTarget" class="muted small ellipsis" target="_blank" rel="noopener"></a>
+      </div>
+      <button class="icon-btn" id="closeStats" aria-label="Close">✕</button>
+    </header>
+    <div class="stats-body">
+      <div class="kpis" id="kpis"></div>
+      <section class="chart-card">
+        <div class="chart-head">
+          <h3>Clicks over time</h3>
+          <div class="range" role="group" aria-label="Time range">
+            <button data-days="7">7d</button>
+            <button data-days="30" class="active">30d</button>
+            <button data-days="90">90d</button>
+          </div>
+        </div>
+        <div class="line-wrap"><canvas id="lineChart"></canvas></div>
+      </section>
+      <div class="chart-grid">
+        <section class="chart-card"><h3>Devices</h3><div class="donut-wrap"><canvas id="deviceChart"></canvas></div></section>
+        <section class="chart-card"><h3>Browsers</h3><div class="donut-wrap"><canvas id="browserChart"></canvas></div></section>
+      </div>
+      <div class="chart-grid">
+        <section class="chart-card"><h3>Top referrers</h3><ul id="referrers" class="rank"></ul></section>
+        <section class="chart-card"><h3>Operating systems</h3><ul id="osList" class="rank"></ul></section>
+      </div>
+      <section class="chart-card">
+        <h3>Recent clicks</h3>
+        <div class="table-wrap"><table class="recent"><thead><tr><th>When</th><th>From</th><th>Browser</th><th>Device</th></tr></thead><tbody id="recent"></tbody></table></div>
+      </section>
+      <section class="chart-card qr-card">
+        <img id="statsQr" alt="QR code" width="160" height="160">
+        <div>
+          <h3>QR code</h3>
+          <p class="muted small">Scan it with a phone camera, or download it for posters and slides.</p>
+          <a id="qrDownload" class="btn ghost" download>Download SVG</a>
+        </div>
+      </section>
+    </div>
+  </aside>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <footer class="footer">Snip · Node.js, Express, SQLite & Chart.js · Open source on GitHub</footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

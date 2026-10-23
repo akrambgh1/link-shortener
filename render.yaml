@@ -1,0 +1,15 @@
+# One-click deploy on Render's free plan: https://render.com/deploy
+# Note: the free plan has no persistent disk, so links reset when the service redeploys.
+services:
+  - type: web
+    name: snip-link-shortener
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22.14.0"
+      - key: VISITOR_SALT
+        generateValue: true
