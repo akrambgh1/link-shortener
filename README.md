@@ -7,6 +7,8 @@ Snip is a full-stack URL shortener like Bitly. It turns long links into short on
 **Tests:** 16 integration tests with `node:test`, with the API tests run on both SQLite and Postgres (via PGlite)
 **Hosting:** Vercel (serverless) + Neon Postgres
 
+**🔗 Live demo:** https://link-shortener-alpha-orpin.vercel.app/
+
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/akrambgh1/link-shortener)
 
 ## ✨ Features
