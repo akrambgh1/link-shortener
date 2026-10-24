@@ -6,6 +6,8 @@ Snip is a full-stack URL shortener like Bitly. It turns long links into short on
 **Frontend:** vanilla JavaScript + **Chart.js**
 **Tests:** 9 integration tests with `node:test`
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/akrambgh1/link-shortener)
+
 ## ✨ Features
 
 - 🔗 **Shorten any link**, with `https://` added automatically and validation (blocks `javascript:` and private or localhost addresses)
