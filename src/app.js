@@ -18,14 +18,15 @@ export class HttpError extends Error {
 }
 
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+const now = () => new Date().toISOString();
 
 function rateLimit({ windowMs, max }) {
   const hits = new Map();
   return (req, _res, next) => {
-    const now = Date.now();
-    const list = (hits.get(req.ip) ?? []).filter((t) => now - t < windowMs);
+    const t = Date.now();
+    const list = (hits.get(req.ip) ?? []).filter((x) => t - x < windowMs);
     if (list.length >= max) return next(new HttpError(429, "You're creating links too fast. Try again in a minute."));
-    list.push(now);
+    list.push(t);
     hits.set(req.ip, list);
     next();
   };
@@ -53,7 +54,31 @@ export function normalizeUrl(raw) {
   return url.toString();
 }
 
-export function createApp({ db, salt = "snip" }) {
+const SQL = {
+  byCode: "SELECT * FROM links WHERE lower(code) = lower(?)",
+  insert: "INSERT INTO links (code, url, owner, created_at) VALUES (?, ?, ?, ?) RETURNING *",
+  remove: "DELETE FROM links WHERE id = ? AND owner = ?",
+  listByOwner: `
+    SELECT l.id, l.code, l.url, l.owner, l.created_at, COUNT(c.id) AS clicks, MAX(c.clicked_at) AS last_click
+    FROM links l LEFT JOIN clicks c ON c.link_id = l.id
+    WHERE l.owner = ? GROUP BY l.id, l.code, l.url, l.owner, l.created_at ORDER BY l.created_at DESC, l.id DESC`,
+  addClick: "INSERT INTO clicks (link_id, clicked_at, referrer, browser, os, device, visitor) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  totals: "SELECT COUNT(*) AS clicks, COUNT(DISTINCT visitor) AS visitors FROM clicks WHERE link_id = ?",
+  perDay: `
+    SELECT substr(clicked_at, 1, 10) AS day, COUNT(*) AS clicks
+    FROM clicks WHERE link_id = ? AND clicked_at >= ? GROUP BY substr(clicked_at, 1, 10) ORDER BY day`,
+  // The column name comes from a fixed list below, never from user input
+  groupBy: (column) =>
+    `SELECT ${column} AS name, COUNT(*) AS clicks FROM clicks WHERE link_id = ? GROUP BY ${column} ORDER BY COUNT(*) DESC, ${column} LIMIT 8`,
+  recent: "SELECT clicked_at, referrer, browser, os, device FROM clicks WHERE link_id = ? ORDER BY id DESC LIMIT 10",
+};
+const GROUPS = { referrers: "referrer", browsers: "browser", os: "os", devices: "device" };
+
+// `database` may be a ready db or a promise of one (serverless cold starts connect lazily)
+export function createApp({ database, salt = "snip" }) {
+  const dbReady = Promise.resolve(database);
+  dbReady.catch(() => {}); // reported per request below
+
   const app = express();
   app.disable("x-powered-by");
   app.set("trust proxy", 1);
@@ -63,24 +88,18 @@ export function createApp({ db, salt = "snip" }) {
     next();
   });
 
-  const q = {
-    byCode: db.prepare("SELECT * FROM links WHERE code = ?"),
-    insert: db.prepare("INSERT INTO links (code, url, owner) VALUES (?, ?, ?)"),
-    remove: db.prepare("DELETE FROM links WHERE code = ? AND owner = ?"),
-    listByOwner: db.prepare(`
-      SELECT l.*, COUNT(c.id) AS clicks, MAX(c.clicked_at) AS last_click
-      FROM links l LEFT JOIN clicks c ON c.link_id = l.id
-      WHERE l.owner = ? GROUP BY l.id ORDER BY l.created_at DESC, l.id DESC`),
-    addClick: db.prepare("INSERT INTO clicks (link_id, referrer, browser, os, device, visitor) VALUES (?, ?, ?, ?, ?, ?)"),
-    totals: db.prepare("SELECT COUNT(*) AS clicks, COUNT(DISTINCT visitor) AS visitors FROM clicks WHERE link_id = ?"),
-    perDay: db.prepare(`
-      SELECT substr(clicked_at, 1, 10) AS day, COUNT(*) AS clicks
-      FROM clicks WHERE link_id = ? AND clicked_at >= ? GROUP BY day ORDER BY day`),
-    groupBy: (column) =>
-      db.prepare(`SELECT ${column} AS name, COUNT(*) AS clicks FROM clicks WHERE link_id = ? GROUP BY ${column} ORDER BY clicks DESC LIMIT 8`),
-    recent: db.prepare("SELECT clicked_at, referrer, browser, os, device FROM clicks WHERE link_id = ? ORDER BY id DESC LIMIT 10"),
-  };
-  const groups = { referrers: q.groupBy("referrer"), browsers: q.groupBy("browser"), os: q.groupBy("os"), devices: q.groupBy("device") };
+  app.get("/api/health", (_req, res) => res.json({ ok: true }));
+
+  const withDb = wrap(async (req, _res, next) => {
+    try {
+      req.db = await dbReady;
+    } catch (err) {
+      console.error("Database connection failed:", err);
+      throw new HttpError(503, "The database is not available right now");
+    }
+    next();
+  });
+  app.use("/api", withDb);
 
   const origin = (req) => `${req.protocol}://${req.get("host")}`;
   const toLink = (row, req) => ({
@@ -88,9 +107,10 @@ export function createApp({ db, salt = "snip" }) {
     url: row.url,
     shortUrl: `${origin(req)}/${row.code}`,
     createdAt: row.created_at,
-    clicks: row.clicks ?? 0,
+    clicks: Number(row.clicks ?? 0),
     lastClick: row.last_click ?? null,
   });
+  const counts = (rows) => rows.map((r) => ({ name: r.name, clicks: Number(r.clicks) }));
 
   // Links are grouped by an anonymous "owner key" the browser generates, so no sign-up is needed
   const owner = (req, _res, next) => {
@@ -100,16 +120,16 @@ export function createApp({ db, salt = "snip" }) {
     next();
   };
 
-  const findOwned = (req) => {
-    const row = q.byCode.get(req.params.code);
+  const findOwned = async (req) => {
+    const row = await req.db.get(SQL.byCode, [req.params.code]);
     if (!row || row.owner !== req.owner) throw new HttpError(404, "Link not found");
     return row;
   };
 
-  const newCode = () => {
+  const newCode = async (db) => {
     for (let attempt = 0; attempt < 10; attempt++) {
       const code = Array.from({ length: 6 }, () => ALPHABET[randomInt(ALPHABET.length)]).join("");
-      if (!q.byCode.get(code)) return code;
+      if (!(await db.get(SQL.byCode, [code]))) return code;
     }
     throw new HttpError(500, "Could not generate a code");
   };
@@ -117,73 +137,77 @@ export function createApp({ db, salt = "snip" }) {
   // ----- API -----
   app.post("/api/links", owner, rateLimit({ windowMs: 60_000, max: 20 }), wrap(async (req, res) => {
     const url = normalizeUrl(req.body?.url);
-    const selfHost = req.hostname;
-    if (new URL(url).hostname === selfHost) throw new HttpError(400, "You can't shorten a link to this site");
+    if (new URL(url).hostname === req.hostname) throw new HttpError(400, "You can't shorten a link to this site");
 
     let code = String(req.body?.alias ?? "").trim();
     if (code) {
       if (!CODE_RE.test(code)) throw new HttpError(400, "Alias can use letters, numbers, - and _ (3–32 characters)");
       if (RESERVED.has(code.toLowerCase())) throw new HttpError(400, "That alias is reserved");
-      if (q.byCode.get(code)) throw new HttpError(409, "That alias is already taken");
+      if (await req.db.get(SQL.byCode, [code])) throw new HttpError(409, "That alias is already taken");
     } else {
-      code = newCode();
+      code = await newCode(req.db);
     }
-    q.insert.run(code, url, req.owner);
-    res.status(201).json({ link: toLink(q.byCode.get(code), req) });
+    const row = await req.db.get(SQL.insert, [code, url, req.owner, now()]);
+    res.status(201).json({ link: toLink(row, req) });
   }));
 
-  app.get("/api/links", owner, (req, res) => {
-    res.json({ links: q.listByOwner.all(req.owner).map((r) => toLink(r, req)) });
-  });
+  app.get("/api/links", owner, wrap(async (req, res) => {
+    const rows = await req.db.all(SQL.listByOwner, [req.owner]);
+    res.json({ links: rows.map((r) => toLink(r, req)) });
+  }));
 
   app.get("/api/links/:code/stats", owner, wrap(async (req, res) => {
-    const link = findOwned(req);
+    const link = await findOwned(req);
     const days = Math.min(Math.max(Number(req.query.days) || 30, 7), 90);
     const since = new Date(Date.now() - (days - 1) * 86400000);
     since.setUTCHours(0, 0, 0, 0);
 
-    const counts = Object.fromEntries(q.perDay.all(link.id, since.toISOString()).map((r) => [r.day, r.clicks]));
+    const [perDay, totals, recent, ...grouped] = await Promise.all([
+      req.db.all(SQL.perDay, [link.id, since.toISOString()]),
+      req.db.get(SQL.totals, [link.id]),
+      req.db.all(SQL.recent, [link.id]),
+      ...Object.values(GROUPS).map((column) => req.db.all(SQL.groupBy(column), [link.id])),
+    ]);
+
+    const byDay = Object.fromEntries(perDay.map((r) => [r.day, Number(r.clicks)]));
     const timeline = Array.from({ length: days }, (_, i) => {
       const day = new Date(since.getTime() + i * 86400000).toISOString().slice(0, 10);
-      return { day, clicks: counts[day] ?? 0 };
+      return { day, clicks: byDay[day] ?? 0 };
     });
+    const [referrers, browsers, os, devices] = grouped.map(counts);
 
-    const totals = q.totals.get(link.id);
     res.json({
       link: toLink({ ...link, clicks: totals.clicks }, req),
-      totals: { clicks: totals.clicks, visitors: totals.visitors },
+      totals: { clicks: Number(totals.clicks), visitors: Number(totals.visitors) },
       timeline,
-      referrers: groups.referrers.all(link.id),
-      browsers: groups.browsers.all(link.id),
-      os: groups.os.all(link.id),
-      devices: groups.devices.all(link.id),
-      recent: q.recent.all(link.id),
+      referrers,
+      browsers,
+      os,
+      devices,
+      recent,
     });
   }));
 
   app.get("/api/links/:code/qr.svg", wrap(async (req, res) => {
-    const row = q.byCode.get(req.params.code);
+    const row = await req.db.get(SQL.byCode, [req.params.code]);
     if (!row) throw new HttpError(404, "Link not found");
     const svg = await QRCode.toString(`${origin(req)}/${row.code}`, { type: "svg", margin: 1, width: 240, color: { dark: "#111827", light: "#ffffff" } });
     res.type("image/svg+xml").set("Cache-Control", "public, max-age=86400").send(svg);
   }));
 
   app.delete("/api/links/:code", owner, wrap(async (req, res) => {
-    findOwned(req);
-    q.remove.run(req.params.code, req.owner);
+    const link = await findOwned(req);
+    await req.db.all(SQL.remove, [link.id, req.owner]);
     res.status(204).end();
   }));
 
-  app.get("/api/health", (_req, res) => res.json({ ok: true }));
   app.use("/api", (_req, _res, next) => next(new HttpError(404, "Route not found")));
 
   app.use(express.static(PUBLIC_DIR));
 
   // ----- the redirect itself -----
-  app.get("/:code", (req, res, next) => {
-    const { code } = req.params;
-    if (!CODE_RE.test(code)) return next();
-    const link = q.byCode.get(code);
+  app.get("/:code", (req, res, next) => (CODE_RE.test(req.params.code) ? next() : next("route")), withDb, wrap(async (req, res) => {
+    const link = await req.db.get(SQL.byCode, [req.params.code]);
     if (!link) return res.status(404).sendFile("404.html", { root: PUBLIC_DIR });
 
     const ua = req.get("user-agent") ?? "";
@@ -192,17 +216,17 @@ export function createApp({ db, salt = "snip" }) {
       // Privacy-friendly unique visitors: a daily hash of IP + browser, never the raw IP
       const day = new Date().toISOString().slice(0, 10);
       const visitor = createHash("sha256").update(`${salt}|${day}|${req.ip}|${ua}`).digest("hex").slice(0, 16);
-      q.addClick.run(link.id, referrerName(req.get("referer"), req.hostname), info.browser, info.os, info.device, visitor);
+      await req.db.all(SQL.addClick, [link.id, now(), referrerName(req.get("referer"), req.hostname), info.browser, info.os, info.device, visitor]);
     }
     res.set("Cache-Control", "no-store").redirect(302, link.url);
-  });
+  }));
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
     if (err.type === "entity.parse.failed") err = new HttpError(400, "Request body must be valid JSON");
     const status = err.status ?? 500;
-    if (status >= 500) console.error(err);
-    res.status(status).json({ error: status >= 500 ? "Something went wrong" : err.message });
+    if (status >= 500 && status !== 503) console.error(err);
+    res.status(status).json({ error: status >= 500 && status !== 503 ? "Something went wrong" : err.message });
   });
 
   return app;

@@ -2,11 +2,12 @@
 
 Snip is a full-stack URL shortener like Bitly. It turns long links into short ones with optional **custom aliases**, generates a **QR code** for each, and tracks every click with a clean **analytics dashboard**: clicks over time, unique visitors, referrers, browsers, operating systems and devices.
 
-**Backend:** Node.js, Express, SQLite (built-in `node:sqlite`), `qrcode`
+**Backend:** Node.js, Express, **Postgres** (Neon) in production and **SQLite** (built-in `node:sqlite`) locally, `qrcode`
 **Frontend:** vanilla JavaScript + **Chart.js**
-**Tests:** 9 integration tests with `node:test`
+**Tests:** 16 integration tests with `node:test`, with the API tests run on both SQLite and Postgres (via PGlite)
+**Hosting:** Vercel (serverless) + Neon Postgres
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/akrambgh1/link-shortener)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/akrambgh1/link-shortener)
 
 ## ✨ Features
 
@@ -65,20 +66,28 @@ clicks (id, link_id → links ON DELETE CASCADE, clicked_at, referrer, browser, 
 
 Stats are calculated with SQL `GROUP BY` queries, and days with no clicks are filled in, so the chart never has gaps.
 
-## ☁️ Deploy for free (Render)
+## ☁️ Deploy for free (Vercel + Neon)
 
-1. Create a free account at [render.com](https://render.com) and connect GitHub.
-2. **New → Blueprint**, then pick this repository (`render.yaml` is included).
-3. The free plan has no persistent disk, so data resets on redeploy. Attach a disk for permanent links.
+1. Click **Deploy with Vercel** above (or import the repo at vercel.com/new).
+2. In the project, open **Storage → Create Database → Neon (Postgres)** and connect it. This adds `DATABASE_URL`.
+3. Optional: add a `VISITOR_SALT` environment variable (any random string), then **Redeploy**.
+
+`vercel.json` sends `/api/*` and short codes like `/my-link` to the serverless function. Everything else (the dashboard) is served as static files.
+
+## 🗄️ One codebase, two databases
+
+`src/db.js` exposes a tiny `all()` / `get()` interface with `?` placeholders, converted to `$1, $2…` for Postgres. Case-insensitive aliases use a `lower(code)` unique index that works in both. The API tests run on SQLite **and** on real Postgres via [PGlite](https://pglite.dev).
 
 ## 📂 Project Structure
 
 ```
 link-shortener/
-├── server.js
+├── server.js         # Local server
+├── api/index.js      # Vercel serverless entry
+├── vercel.json       # Rewrites for /api/* and short codes
 ├── src/
 │   ├── app.js        # Routes, validation, redirect + click tracking, stats
-│   ├── db.js         # SQLite schema
+│   ├── db.js         # SQLite / Postgres adapter + schema
 │   └── ua.js         # User-agent & referrer parsing
 ├── public/           # Dashboard (HTML, CSS, JS + Chart.js), 404 page
 └── test/api.test.js

@@ -14,7 +14,11 @@
   },
   "dependencies": {
     "express": "4.21.2",
+    "pg": "8.13.1",
     "qrcode": "1.5.4"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@electric-sql/pglite": "0.2.17"
+  }
 }
