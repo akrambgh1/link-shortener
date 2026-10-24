@@ -88,7 +88,17 @@ export function createApp({ database, salt = "snip" }) {
     next();
   });
 
-  app.get("/api/health", (_req, res) => res.json({ ok: true }));
+  // Reports whether the database works, without exposing any connection details
+  app.get("/api/health", wrap(async (_req, res) => {
+    try {
+      const db = await dbReady;
+      await db.get("SELECT 1 AS ok");
+      res.json({ ok: true, database: "connected", engine: db.dialect });
+    } catch (err) {
+      const missing = /not set/i.test(err?.message ?? "");
+      res.status(503).json({ ok: false, database: missing ? "not configured" : "error", code: err?.code ?? null });
+    }
+  }));
 
   const withDb = wrap(async (req, _res, next) => {
     try {
